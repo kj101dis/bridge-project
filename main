@@ -1,0 +1,343 @@
+
+========================================
+ SMART DRAWBRIDGE SYSTEM
+ ESP32 FINAL CODE
+========================================
+
+Features:
+- Boat detection using HC-SR04
+- Flashing red warning lights
+- Green traffic light
+- Servo warning sign
+- Motorized bridge lift
+- Top & bottom limit switches
+- Emergency stop button
+- Manual override toggle switch
+
+========================================
+PIN CONNECTIONS
+========================================
+
+HC-SR04
+TRIG  -> GPIO 5
+ECHO  -> GPIO 18
+
+Servo
+Signal -> GPIO 13
+
+LEDs
+Red LED 1 -> GPIO 26
+Red LED 2 -> GPIO 27
+Green LED -> GPIO 25
+
+Motor Driver (L298N)
+IN1 -> GPIO 32
+IN2 -> GPIO 33
+
+Limit Switches
+Top Switch -> GPIO 34
+Bottom Switch -> GPIO 35
+
+Buttons/Switches
+Emergency Stop -> GPIO 4
+Manual Override -> GPIO 23
+
+========================================
+IMPORTANT
+========================================
+ALL GROUNDS MUST CONNECT TOGETHER
+ESP32 GND
+L298N GND
+Battery Negative
+Sensor GND
+Servo GND
+
+========================================
+*/
+
+#include <ESP32Servo.h>
+
+Servo signServo;
+
+/* ---------- PIN DEFINITIONS ---------- */
+
+// Ultrasonic sensor
+const int trigPin = 5;
+const int echoPin = 18;
+
+// LEDs
+const int redLED1 = 26;
+const int redLED2 = 27;
+const int greenLED = 25;
+
+// Motor driver
+const int motorIN1 = 32;
+const int motorIN2 = 33;
+
+// Servo
+const int servoPin = 13;
+
+// Limit switches
+const int topLimit = 34;
+const int bottomLimit = 35;
+
+// Controls
+const int emergencyButton = 4;
+const int manualSwitch = 23;
+
+/* ---------- SETTINGS ---------- */
+
+const int boatThreshold = 30; // cm
+
+bool bridgeOpen = false;
+
+long duration;
+
+/* ====================================
+                SETUP
+==================================== */
+
+void setup() {
+
+  Serial.begin(115200);
+
+  // Servo
+  signServo.attach(servoPin);
+
+  // Ultrasonic
+  pinMode(trigPin, OUTPUT);
+  pinMode(echoPin, INPUT);
+
+  // LEDs
+  pinMode(redLED1, OUTPUT);
+  pinMode(redLED2, OUTPUT);
+  pinMode(greenLED, OUTPUT);
+
+  // Motor
+  pinMode(motorIN1, OUTPUT);
+  pinMode(motorIN2, OUTPUT);
+
+  // Limit switches
+  pinMode(topLimit, INPUT_PULLUP);
+  pinMode(bottomLimit, INPUT_PULLUP);
+
+  // Buttons/switches
+  pinMode(emergencyButton, INPUT_PULLUP);
+  pinMode(manualSwitch, INPUT_PULLUP);
+
+  // Initial states
+  digitalWrite(greenLED, HIGH);
+
+  digitalWrite(redLED1, LOW);
+  digitalWrite(redLED2, LOW);
+
+  // Sign starts lowered
+  signServo.write(0);
+
+  Serial.println("SYSTEM READY");
+}
+
+/* ====================================
+                LOOP
+==================================== */
+
+void loop() {
+
+  // Emergency stop
+  if (digitalRead(emergencyButton) == LOW) {
+    emergencyStop();
+    return;
+  }
+
+  // Manual override
+  if (digitalRead(manualSwitch) == LOW) {
+
+    Serial.println("MANUAL OVERRIDE");
+
+    openBridge();
+
+    delay(5000);
+
+    closeBridge();
+
+    return;
+  }
+
+  // Automatic boat detection
+  int distance = getDistance();
+
+  Serial.print("Distance: ");
+  Serial.println(distance);
+
+  // Boat detected
+  if (distance < boatThreshold && !bridgeOpen) {
+
+    openBridge();
+
+    bridgeOpen = true;
+  }
+
+  // Boat gone
+  if (distance > boatThreshold && bridgeOpen) {
+
+    closeBridge();
+
+    bridgeOpen = false;
+  }
+
+  delay(200);
+}
+
+/* ====================================
+         ULTRASONIC DISTANCE
+==================================== */
+
+int getDistance() {
+
+  digitalWrite(trigPin, LOW);
+  delayMicroseconds(2);
+
+  digitalWrite(trigPin, HIGH);
+  delayMicroseconds(10);
+
+  digitalWrite(trigPin, LOW);
+
+  duration = pulseIn(echoPin, HIGH);
+
+  int distance = duration * 0.034 / 2;
+
+  return distance;
+}
+
+/* ====================================
+           FLASH WARNING LIGHTS
+==================================== */
+
+void flashLights(int timeMs) {
+
+  long startTime = millis();
+
+  while (millis() - startTime < timeMs) {
+
+    digitalWrite(redLED1, HIGH);
+    digitalWrite(redLED2, LOW);
+
+    delay(300);
+
+    digitalWrite(redLED1, LOW);
+    digitalWrite(redLED2, HIGH);
+
+    delay(300);
+
+    // Emergency stop check
+    if (digitalRead(emergencyButton) == LOW) {
+      emergencyStop();
+      return;
+    }
+  }
+}
+
+/* ====================================
+             OPEN BRIDGE
+==================================== */
+
+void openBridge() {
+
+  Serial.println("OPENING BRIDGE");
+
+  // Raise sign
+  signServo.write(90);
+
+  // Turn off green light
+  digitalWrite(greenLED, LOW);
+
+  // Flash warning lights
+  flashLights(3000);
+
+  // Lift bridge
+  digitalWrite(motorIN1, HIGH);
+  digitalWrite(motorIN2, LOW);
+
+  // Wait until top limit switch pressed
+  while (digitalRead(topLimit) == HIGH) {
+
+    // Emergency stop check
+    if (digitalRead(emergencyButton) == LOW) {
+      emergencyStop();
+      return;
+    }
+  }
+
+  // Stop motor
+  digitalWrite(motorIN1, LOW);
+  digitalWrite(motorIN2, LOW);
+
+  Serial.println("BRIDGE OPEN");
+}
+
+/* ====================================
+             CLOSE BRIDGE
+==================================== */
+
+void closeBridge() {
+
+  Serial.println("CLOSING BRIDGE");
+
+  // Flash warning lights
+  flashLights(2000);
+
+  // Lower bridge
+  digitalWrite(motorIN1, LOW);
+  digitalWrite(motorIN2, HIGH);
+
+  // Wait until bottom limit switch pressed
+  while (digitalRead(bottomLimit) == HIGH) {
+
+    // Emergency stop check
+    if (digitalRead(emergencyButton) == LOW) {
+      emergencyStop();
+      return;
+    }
+  }
+
+  // Stop motor
+  digitalWrite(motorIN1, LOW);
+  digitalWrite(motorIN2, LOW);
+
+  // Lower sign
+  signServo.write(0);
+
+  // Turn off red lights
+  digitalWrite(redLED1, LOW);
+  digitalWrite(redLED2, LOW);
+
+  // Turn green light on
+  digitalWrite(greenLED, HIGH);
+
+  Serial.println("BRIDGE CLOSED");
+}
+
+/* ====================================
+            EMERGENCY STOP
+==================================== */
+
+void emergencyStop() {
+
+  Serial.println("!!! EMERGENCY STOP !!!");
+
+  // Stop motor immediately
+  digitalWrite(motorIN1, LOW);
+  digitalWrite(motorIN2, LOW);
+
+  // Turn on both red lights solid
+  digitalWrite(redLED1, HIGH);
+  digitalWrite(redLED2, HIGH);
+
+  // Wait until button released
+  while (digitalRead(emergencyButton) == LOW) {
+    delay(10);
+  }
+
+  Serial.println("Emergency cleared");
+}
+```
